@@ -127,10 +127,18 @@ type Options struct {
 	MinHeartbeatPeriod time.Duration // 最小允许的心跳周期
 	MaxErrorCount      int           // 最大累积错误次数
 	ReadTimeout        time.Duration // 读取超时时间
+	Metadata           map[any]any   // 连接元数据
 }
 
 // Option 选项函数
 type Option func(*Options)
+
+// WithMetadata 设置连接元数据
+func WithMetadata(metadata map[any]any) Option {
+	return func(o *Options) {
+		o.Metadata = metadata
+	}
+}
 
 // WithReadTimeout 设置读取超时时间
 func WithReadTimeout(timeout time.Duration) Option {

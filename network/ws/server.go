@@ -61,7 +61,7 @@ func (s *Server) GetConnectionManager() network.ConnectionManager {
 }
 
 // HandleWebSocket 处理 WebSocket 升级和连接
-func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request, id string, metadata map[any]any) error {
+func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request, id string, opts ...network.Option) error {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return fmt.Errorf("websocket upgrade failed: %w", err)
@@ -75,12 +75,13 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request, id stri
 		s.ctx = context.Background()
 	}
 
-	wsConn := NewConnection(s.ctx, id, conn, s.close, metadata,
+	allOpts := append([]network.Option{
 		network.WithCoder(s.opts.Coder),
 		network.WithReadTimeout(s.opts.ReadTimeout),
 		network.WithMaxMessageSize(s.opts.MaxMessageSize),
 		network.WithMaxErrorCount(s.opts.MaxErrorCount),
-	)
+	}, opts...)
+	wsConn := NewConnection(s.ctx, id, conn, s.close, allOpts...)
 	wsConn.SetConnectionManager(s.connectionManager)
 
 	if err := s.connectionManager.AddConnection(wsConn); err != nil {

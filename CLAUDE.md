@@ -44,6 +44,18 @@ go build ./...
 
 - **`message/`** — 消息编解码，支持 `JSON` 和 `Protobuf` 两种实现。
 
+- **`eventbus/`** — 类型安全进程内事件总线，基于泛型。`Subscribe[T]` 返回只读 channel，`Publish[T]` 非阻塞发送。
+
+- **`tracer/`** — Trace ID 传播工具。通过 `context.Context` 传递 traceId，默认 gRPC header `x-trace-id`。
+
+- **`interceptor/`** — gRPC 拦截器工厂。`TraceUnaryInterceptor()` 自动注入 traceId 到 gRPC metadata。
+
+- **`key/`** — 带前缀的分隔键生成器（`Keyer`），用于缓存 key、topic 名称等。
+
+- **`topic/`** — 分布式主题封装（基于 NATS），提供 `Topic` + `Register` 接口，自动 JSON 编解码。
+
+- **`nats/`** — NATS 客户端封装（预留空包，具体逻辑在 `topic/` 中）。
+
 - **`utils/`** — 工具函数：hash、math、rand、slices、stack、time、uuid。
 
 ### 关键设计模式

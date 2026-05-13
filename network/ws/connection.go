@@ -16,15 +16,15 @@ import (
 // Connection WebSocket 连接实现
 type Connection struct {
 	*network.BaseConnection
-	conn   *websocket.Conn
-	opts   *network.Options
-	ctx    context.Context
-	close  chan struct{}
+	conn    *websocket.Conn
+	opts    *network.Options
+	ctx     context.Context
+	close   chan struct{}
 	connMgr network.ConnectionManager
 }
 
 // NewConnection 创建新的 WebSocket 连接
-func NewConnection(ctx context.Context, id string, conn *websocket.Conn, close chan struct{}, metadata map[any]any, opts ...network.Option) *Connection {
+func NewConnection(ctx context.Context, id string, conn *websocket.Conn, close chan struct{}, opts ...network.Option) *Connection {
 	if close == nil {
 		close = make(chan struct{})
 	}
@@ -35,10 +35,8 @@ func NewConnection(ctx context.Context, id string, conn *websocket.Conn, close c
 	}
 
 	baseConn := network.NewBaseConnection(id, options.MaxErrorCount)
-	if metadata != nil {
-		for k, v := range metadata {
-			baseConn.SetMetadata(k, v)
-		}
+	for k, v := range options.Metadata {
+		baseConn.SetMetadata(k, v)
 	}
 
 	return &Connection{
