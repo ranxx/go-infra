@@ -23,7 +23,7 @@ type Dialer interface {
 // Wrap 从环境变量读取代理配置，并通过回调函数设置原始 dialer
 // 如果未设置代理，回调不会执行
 func Wrap(f func(dr Dialer)) bool {
-	d := proxy.FromEnvironmentUsing(nil)
+	d := proxy.FromEnvironmentUsing(proxy.Direct)
 	if d == nil {
 		return false
 	}
