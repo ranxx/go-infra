@@ -13,11 +13,11 @@ const (
 
 // Config 日志配置
 type Config struct {
-	Level       string `json:"level" yaml:"level" default:"debug"`                 // debug, info, warn, error
-	Format      string `json:"format" yaml:"format" default:"text"`                // json, text
-	ServiceName string `json:"service_name" yaml:"service_name" default:"unknown"` // 服务名称
-	FilePath    string `json:"file_path" yaml:"file_path"`                        // 日志文件路径（空表示不写文件）
-	OutputMode  OutputMode `json:"output_mode" yaml:"output_mode"`              // 输出模式
+	Level       string     `json:"level" yaml:"level" default:"debug"`                 // debug, info, warn, error
+	Format      string     `json:"format" yaml:"format" default:"text"`                // json, text
+	ServiceName string     `json:"service_name" yaml:"service_name" default:"unknown"` // 服务名称
+	FilePath    string     `json:"file_path" yaml:"file_path"`                         // 日志文件路径（空表示不写文件）
+	OutputMode  OutputMode `json:"output_mode" yaml:"output_mode"`                     // 输出模式
 }
 
 // ElasticsearchConfig ES 配置（兼容旧 API，建议使用 elasticsearch.Config）

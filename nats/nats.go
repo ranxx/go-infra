@@ -3,10 +3,35 @@ package nats
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	natsgo "github.com/nats-io/nats.go"
 )
+
+var (
+	globalNatsConn *natsgo.Conn
+	natsOnce       sync.Once
+)
+
+// Init 初始化全局 NATS 连接（单例），应在服务启动时调用
+func Init(cfg *Config) error {
+	var initErr error
+	natsOnce.Do(func() {
+		nc, err := Connect(cfg.URL, 3)
+		if err != nil {
+			initErr = err
+			return
+		}
+		globalNatsConn = nc
+	})
+	return initErr
+}
+
+// Get 获取全局 NATS 连接
+func Get() *natsgo.Conn {
+	return globalNatsConn
+}
 
 // ConnectWithContext 连接 NATS，支持 context 取消和超时
 // ctx 用于整体超时控制；maxRetry 为单次连接失败后的重试次数
@@ -44,9 +69,9 @@ func ConnectWithContext(ctx context.Context, url string, maxRetry int) (*natsgo.
 	return nil, fmt.Errorf("connect to NATS %s failed after %d attempts: %w", url, maxRetry, err)
 }
 
-// Connect 连接 NATS（带重试），默认 2 分钟超时
+// Connect 连接 NATS（带重试），默认 30 秒超时
 func Connect(url string, maxRetry int) (*natsgo.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return ConnectWithContext(ctx, url, maxRetry)
 }

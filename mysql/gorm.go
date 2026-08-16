@@ -13,8 +13,8 @@ var (
 	once sync.Once
 )
 
-// Init 初始化 MySQL 客户端
-func Init(cfg *Config) (*gorm.DB, error) {
+// Init 初始化全局 MySQL 客户端（单例），应在服务启动时调用
+func Init(cfg *Config) error {
 	var err error
 	once.Do(func() {
 		db, e := NewGormDB(cfg)
@@ -24,7 +24,12 @@ func Init(cfg *Config) (*gorm.DB, error) {
 		}
 		_db = db
 	})
-	return _db, err
+	return err
+}
+
+// Get 获取全局 MySQL/GORM 数据库实例
+func Get() *gorm.DB {
+	return _db
 }
 
 // NewGormDB 创建 GORM DB 客户端，连接失败时返回 nil 但不报错

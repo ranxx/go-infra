@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/ranxx/go-infra/proxy"
@@ -40,20 +41,18 @@ func NewClient(cfg *Config) (*mongo.Client, error) {
 	}
 	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
-		fmt.Printf("WARNING: failed to connect to MongoDB: %v, service will continue without MongoDB\n", err)
-		return nil, nil
+		return nil, fmt.Errorf("mongo connect: %w", err)
 	}
 
 	// Ping 检查连接
 	if err := client.Ping(ctx, readpref.Primary()); err != nil {
-		fmt.Printf("WARNING: failed to ping MongoDB: %v, service will continue without MongoDB\n", err)
-		return nil, nil
+		return nil, fmt.Errorf("mongo ping: %w", err)
 	}
 
 	return client, nil
 }
 
-// GetDatabase 获取指定数据库
+// GetDatabase 根据名称获取数据库
 func GetDatabase(client *mongo.Client, name string) *mongo.Database {
 	if client == nil {
 		return nil
@@ -64,4 +63,39 @@ func GetDatabase(client *mongo.Client, name string) *mongo.Database {
 // NewMongoDatabase 创建 MongoDB 数据库实例
 func NewMongoDatabase(client *mongo.Client, cfg *Config) *mongo.Database {
 	return GetDatabase(client, cfg.Database)
+}
+
+var (
+	globalMongoClient   *mongo.Client
+	globalMongoDatabase *mongo.Database
+	mongoOnce           sync.Once
+)
+
+// Init 初始化全局 MongoDB 连接（单例），应在服务启动时调用
+func Init(cfg *Config) error {
+	var initErr error
+	mongoOnce.Do(func() {
+		client, err := NewClient(cfg)
+		if err != nil {
+			initErr = err
+			return
+		}
+		if client == nil {
+			initErr = fmt.Errorf("mongo: failed to create client")
+			return
+		}
+		globalMongoClient = client
+		globalMongoDatabase = NewMongoDatabase(client, cfg)
+	})
+	return initErr
+}
+
+// Client 获取全局 MongoDB 客户端
+func Client() *mongo.Client {
+	return globalMongoClient
+}
+
+// Get 获取全局 MongoDB 数据库实例
+func Get() *mongo.Database {
+	return globalMongoDatabase
 }

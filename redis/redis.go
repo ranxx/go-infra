@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -45,4 +46,21 @@ func NewClient(cfg *Config) RedisClient {
 
 	rdb := redis.NewClient(opts)
 	return &RedisClientImpl{rdb}
+}
+
+var (
+	globalRedisClient RedisClient
+	redisOnce         sync.Once
+)
+
+// Init 初始化全局 Redis 客户端（单例），应在服务启动时调用
+func Init(cfg *Config) {
+	redisOnce.Do(func() {
+		globalRedisClient = NewClient(cfg)
+	})
+}
+
+// Get 获取全局 Redis 客户端
+func Get() RedisClient {
+	return globalRedisClient
 }

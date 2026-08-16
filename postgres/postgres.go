@@ -41,6 +41,8 @@ func NewGormDB(cfg *Config) (*gorm.DB, error) {
 		return nil, err
 	}
 
+	db = db.Debug()
+
 	sqlDB.SetMaxIdleConns(cfg.IdleConns)
 	sqlDB.SetMaxOpenConns(cfg.MaxConns)
 	sqlDB.SetConnMaxLifetime(time.Duration(cfg.MaxLifetime) * time.Second)
@@ -49,5 +51,10 @@ func NewGormDB(cfg *Config) (*gorm.DB, error) {
 
 // DB 返回已初始化的 DB 实例
 func DB() *gorm.DB {
+	return _db
+}
+
+// Get 返回已初始化的 DB 实例（与 mysql / redis / mongo 包保持一致的命名）
+func Get() *gorm.DB {
 	return _db
 }

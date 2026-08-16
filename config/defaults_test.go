@@ -56,7 +56,7 @@ func TestApplyDefaults_DoesNotOverrideNonZero(t *testing.T) {
 func TestLoadByKey_ApplyDefaultsAndOverrideByPayload(t *testing.T) {
 	cfg := mysql.Config{}
 	provider := stubProvider{
-		"mysql": `{"DSN":"root:pwd@tcp(localhost:3306)/db","MaxConns":200}`,
+		"mysql": `{"DSN":"root:pwd@tcp(localhost:3306)/db","max_conns":200}`,
 	}
 
 	if err := LoadByKey("mysql", &cfg, provider); err != nil {

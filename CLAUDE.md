@@ -2,184 +2,67 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 概述
+> 本仓库是 `aitrading` 工作区的子模块。整体架构、本地开发环境、跨仓库依赖见上一级 `../CLAUDE.md`。本文件只补充 `go-infra` 内部的工作方式。
 
-这是一个基础设施库（`github.com/ranxx/go-infra`），提供 Go 应用的通用组件：Redis、MySQL、MongoDB、Elasticsearch、gRPC、TCP/WebSocket 网络、任务调度、日志、分布式锁和代理支持。
+## 这个库是什么
 
-## 构建与测试命令
+`github.com/ranxx/go-infra` —— 共享基础设施库，**纯库，无 main 包**。Go 1.26.1。
+
+后端 `ai-trading-server` 通过 `replace github.com/ranxx/go-infra => ../go-infra` 本地引用，因此**改动这里会立即影响后端构建，无需发版**。`make release` 仅用于给需要按 tag 拉取的外部消费者打版本。
+
+## 命令
 
 ```bash
-# 运行所有测试
-go test ./...
+go build ./...                              # 编译整个库
+go test ./...                               # 跑全部测试
+go test -race ./...                         # 运行竞态检测
+go vet ./...                                 # 运行标准静态检查
+go test -v ./config/...                     # 跑单个包
+go test -count=1 -run '^TestName$' ./config/ # 跑单个测试并跳过缓存
+gofmt -w path/to/changed.go                 # 格式化修改过的 Go 文件
 
-# 运行测试（详细输出）
-go test -v ./...
-
-# 运行单个包的测试
-go test -v ./config/...
-
-# 构建（无 main 包，纯库）
-go build ./...
+make release                                # ⚠️ 危险：自动 git add . && commit && push，并把最新 vX.Y.Z 的 patch+1 打 tag 推到远程。
+                                            # 不要随手执行——它会提交工作区里所有未暂存改动。
 ```
 
-## 架构
+当前测试覆盖很薄，只有 `config/`（defaults、loader）、`dedup/`、`eventbus/` 有测试。改动核心逻辑时需要手动验证。
 
-### 包结构
+## 两套配置系统（最容易混淆的点）
 
-- **`config/`** — 配置管理，提供 `Provider` 接口和热加载支持（`Reloadable`）。通过 `default` 结构体标签应用默认值。`LoadByKey` 按优先级链式加载配置（回退模式）。
+仓库里**并存两种配置加载机制**，新代码默认用后者：
 
-- **`logger/`** — 基于 Logrus 的日志模块。`Init()` 接收函数式选项，可选添加 Elasticsearch Hook。通过 `GetLogger()` / `GetFieldLogger()` 获取全局日志实例。
+1. **Provider 链式加载** —— `config/config.go` 的 `Config` 结构体。面向远程配置中心（Apollo 风格）：`Provider.GetValue(key)` 返回一段 JSON 字符串，按传入顺序回退取第一个非空的。用法是链式调用 `NewConfig(p...).LoadMySQL().LoadRedis().LoadLog().Error()`。底层走 `LoadByKey`（先 `ApplyDefaults` 填 `default` tag，再 `json.Unmarshal`）。
 
-- **`task/`** — 基于 `robfig/cron` 的任务调度器。使用 `Schedule` 接口支持自定义时间策略，`DurationSchedule` 实现间隔调度。通过 `sync.Once` 保证单例初始化。
+2. **YAML + 环境变量** —— `config/loader.go` 的 `Load(path, &cfg)` / `LoadOrDefault(path, &cfg)`。这是后端各服务实际在用的方式，优先级 **env > yaml > default tag > 零值**。识别三种 struct tag：`yaml:"x"`、`env:"ENV_VAR"`、`default:"x"`。`LoadOrDefault` 在文件缺失时不报错、退回 default+env。
 
-- **`network/`** — 抽象网络层，支持 TCP 和 WebSocket。核心接口定义在 `network.go`，默认实现分散在各子包。
+两者共用 `config/defaults.go` 的 `ApplyDefaults`：按 `default` tag 递归填零值字段，支持 `time.Duration`（如 `default:"24h"`）和指针字段。**所有基础组件的 `Config` 都靠 `default` tag 提供默认值**，新增配置字段时记得带上。
 
-- **`grpc/`** — gRPC 服务端封装，带 unary 拦截器实现 trace ID 传播和请求日志。实现 `Register` 接口注册服务，默认注册健康检查和 reflection 服务。
+## 贯穿全库的约定（动手前先理解）
 
-- **`redis/`**、**`mysql/`**、**`mongo/`**、**`elasticsearch/`** — 各存储客户端封装。MySQL 使用 GORM，Redis 支持通过 `proxy.Wrap()` 配置代理拨号。
+- **单例 `Init(cfg)` + `Get()` + `sync.Once`**：`redis`、`postgres`、`nats`、`dlock`、`topic`、`task` 都是这个模式——服务启动时 `Init` 一次，业务代码用 `Get()` 取全局实例。同时通常也暴露 `NewXxx(cfg)` 构造非全局实例。新增有状态组件时沿用此约定。
+- **函数式选项**：`logger.WithLevel(...)`、`task.Option`、`network.WithAddress(...)`、`middleware.WithCORS(...)`、`rate.WithCleanupInterval(...)` 等。`logger.Config` 同时提供 struct-tag 配置和 `Options` 两套入口。
+- **代理拨号**：存储客户端（如 `redis`）的 `Config` 带 `Proxy bool` 字段，为 true 时用 `proxy.Wrap()` 注入自定义 `Dialer`，代理地址从 `ALL_PROXY` / `no_proxy` 环境变量读取。这是为了从境内连境外交易所/服务。新增需要外连的客户端时复用 `proxy` 包。
+- **Trace ID 传播**：`tracer` 包在 `context` 里传 traceId（gRPC header 默认 `x-trace-id`）。`grpc.Server` 的 unary 拦截器自动「从 metadata 取或新生成 traceId → 注入出站 metadata → 带进结构化日志」，并打印方法名+耗时（不打请求开始日志）。HTTP 侧 `middleware.Logger` 用 `X-Trace-ID` 做同样的事。`interceptor.TraceUnaryInterceptor()` 是 gRPC **客户端**侧的对应物。
 
-- **`proxy/`** — SOCKS5/HTTP 代理支持，从 `ALL_PROXY` / `no_proxy` 环境变量读取配置。
+## 包速览（按职责分组）
 
-- **`dlock/`** — 分布式锁实现。
+- **存储客户端** `redis` `mysql` `postgres` `mongo` `elasticsearch`：每个都是 `config.go`（带 `default` tag）+ 客户端封装，单例 Init/Get。`mysql`/`postgres` 用 GORM。`redis` 暴露 `RedisClient` 接口（不是裸 `*redis.Client`），并支持 proxy。
+- **消息/事件**：
+  - `nats`：NATS Core 连接（带重试、`ConnectWithContext`）+ JetStream 辅助（`NewJetStream` 建流、`Subscribe` 持久订阅 ManualAck/MaxDeliver=3）。交易平台的 kline 事件流走这里。
+  - `topic`：**另一套** NATS 抽象——用 `key.Keyer` 给 subject 加前缀，外面包一层 `{Id, Data}` JSON 信封。比 `nats` 包更老，注意别和它混用。
+  - `eventbus`：进程内、基于泛型的类型安全事件总线（`Publish[T]` 非阻塞 / `Subscribe[T]` 返回只读 channel）。
+  - `message`：消息编解码，`JSON` 与 `Protobuf` 两种实现。
+- **HTTP** `middleware` + `limiter`：`middleware` 提供 `CORS`/`Logger`/`Recovery`/`RateLimit` 及 `Stack` 组合器（`NewStack(WithRecovery(), WithLogger(), ...).Then(mux)`，先加的在最外层）。`limiter/rate` 是令牌桶 `RateLimiter`（按 key 分桶、自动清理过期桶），被 `middleware.RateLimit` 消费。
+- **gRPC** `grpc` `interceptor` `tracer`：`grpc.NewServer(cfg, logger, services...)` 自动注册标准 Health Check（K8s gRPC 探针）+ reflection + trace 拦截器；业务服务实现 `Register` 接口。
+- **网络** `network`：TCP / WebSocket 统一抽象。核心接口 `Connection` / `MessageHandler` / `ConnectionManager` / `Server` 在 `network.go`，实现分在 `tcp/`、`ws/` 子包，配 `Coder`（编解码）+ `Packer`（粘包处理）。
+- **协调/并发** `dlock` `dedup` `task`：
+  - `dlock`：基于 Redis 的分布式锁，SETNX 取锁、Lua 脚本保证「值匹配才释放/续期」防误删。`TryAcquirePeriodLock` 用于「定时任务每周期只让一个 Pod 跑一次」。另有 `redis/try_lock.go` 是更轻量的单文件实现。
+  - `dedup`：**为 collector 场景定制**——多个采集实例并行时，用 Redis `SET NX EX` 保证同一条 tick 只发布一次到 NATS；`TryPublish` 在 Redis 出错时返回 error 让调用方降级（直接发布）。键格式见 `dedup.Key`（含 exchange/instType/symbol 隔离）。
+  - `task`：基于 `robfig/cron` 的调度器，`Schedule` 接口 + `DurationSchedule` 间隔调度，`sync.Once` 单例。
+- **基础工具** `logger`（Logrus，可挂 ES Hook，console/file/both 输出）、`key`（带前缀分隔符的 `Keyer`，给缓存 key / NATS subject 加命名空间）、`proxy`（SOCKS5/HTTP）、`utils`（hash/math/rand/uuid/time/stack/notify）。
 
-- **`message/`** — 消息编解码，支持 `JSON` 和 `Protobuf` 两种实现。
+## 注意事项
 
-- **`eventbus/`** — 类型安全进程内事件总线，基于泛型。`Subscribe[T]` 返回只读 channel，`Publish[T]` 非阻塞发送。
-
-- **`tracer/`** — Trace ID 传播工具。通过 `context.Context` 传递 traceId，默认 gRPC header `x-trace-id`。
-
-- **`interceptor/`** — gRPC 拦截器工厂。`TraceUnaryInterceptor()` 自动注入 traceId 到 gRPC metadata。
-
-- **`key/`** — 带前缀的分隔键生成器（`Keyer`），用于缓存 key、topic 名称等。
-
-- **`topic/`** — 分布式主题封装（基于 NATS），提供 `Topic` + `Register` 接口，自动 JSON 编解码。
-
-- **`nats/`** — NATS 客户端封装（预留空包，具体逻辑在 `topic/` 中）。
-
-- **`utils/`** — 工具函数：hash、math、rand、slices、stack、time、uuid。
-
-### 关键设计模式
-
-- **函数式选项（Functional Options）** — 所有主要组件接受 `Option` 函数类型进行配置（如 `task.Option`、`network.Option`）。
-- **单例模式** — `task.Init()` 使用 `sync.Once` 确保只初始化一次。
-- **接口契约** — `Connection`、`MessageHandler`、`Server`、`Provider`、`Reloadable` 定义了组件边界，便于替换实现。
-- **配置默认值** — `ApplyDefaults()` 读取 `default` 标签填充零值，`LoadByKey()` 链式调用 providers 实现回退加载。
-
-## Network 模块详解
-
-### 目录结构
-
-```
-network/
-├── network.go       # 核心接口定义
-├── connection.go    # BaseConnection 基类
-├── manager.go       # DefaultConnectionManager
-├── tcp/
-│   ├── server.go    # TCP Server
-│   └── connection.go # TCP Connection
-└── ws/
-    ├── server.go    # WebSocket Server
-    └── connection.go # WebSocket Connection
-```
-
-### 核心接口
-
-```go
-// Connection 连接接口
-type Connection interface {
-    GetID() string
-    SetID(id string)
-    GetMetadata(key any) (any, bool)
-    SetMetadata(key, value any)
-    GetMetadatas() map[any]any
-    Send(data any) error
-    Close() error
-    IsClosed() bool
-    GetRemoteAddr() net.Addr
-    GetConnectedAt() time.Time
-}
-
-// MessageHandler 消息处理器
-type MessageHandler interface {
-    OnConnect(ctx context.Context, conn Connection) error
-    OnMessage(ctx context.Context, conn Connection, data any) error
-    OnDisconnect(ctx context.Context, conn Connection, err error)
-}
-
-// ConnectionManager 连接管理器
-type ConnectionManager interface {
-    AddConnection(conn Connection) error
-    AuthenticateConnection(conn Connection) error
-    RemoveConnection(id string) error
-    GetConnection(id string) (Connection, bool)
-    GetConnections(ids ...string) []Connection
-    Broadcast(val any, ids ...string)
-    GetConnectionCount() int
-    Close() error
-}
-
-// Server 服务器接口
-type Server interface {
-    SetMessageHandler(handler MessageHandler)
-    GetConnectionManager() ConnectionManager
-    Start(ctx context.Context) error
-    Stop(ctx context.Context) error
-    IsRunning() bool
-}
-
-// Coder 编码器接口
-type Coder interface {
-    Unmarshal(data []byte) (interface{}, error)
-    Marshal(v interface{}) ([]byte, error)
-}
-
-// Packer 打包器接口
-type Packer interface {
-    GetHeadLength() uint32
-    UnpackHead([]byte) (uint32, error)
-    Pack([]byte) ([]byte, error)
-}
-```
-
-### 使用示例
-
-**TCP 服务器：**
-
-```go
-tcpServer := tcp.NewServer(
-    network.WithAddress(":8080"),
-    network.WithMaxConnections(10000),
-    network.WithCoder(yourCoder),
-    network.WithPacker(yourPacker),
-    network.WithMessageHandler(&network.MessageHandlerFunc{
-        OnConnectFn: func(ctx context.Context, conn network.Connection) error {
-            return nil
-        },
-        OnMessageFn: func(ctx context.Context, conn network.Connection, data any) error {
-            return nil
-        },
-        OnDisconnectFn: func(ctx context.Context, conn network.Connection, err error) {
-        },
-    }),
-)
-
-tcpServer.Start(context.Background())
-defer tcpServer.Stop(context.Background())
-```
-
-**WebSocket 服务器：**
-
-```go
-wsServer := ws.NewServer(
-    network.WithAddress(":8081"),
-    network.WithMessageHandler(yourHandler),
-)
-
-wsServer.Start(context.Background())
-defer wsServer.Stop(context.Background())
-
-// 在 HTTP handler 中处理 WebSocket 升级
-http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-    wsServer.HandleWebSocket(w, r, uniqueID, metadata)
-})
-```
+- 给任意 `Config` 加字段时，三处要对齐：`json` tag、`yaml` tag、`default` tag——两套配置系统分别依赖 json 和 yaml。
+- `nats` 与 `topic` 功能重叠，确认要改的是哪一套；新功能优先用 `nats` 包。
+- 这是被 9+ 个后端服务共享的库，改动公共接口（如 `redis.RedisClient`、`config.Provider`、`network.Connection`）会波及所有消费者，先评估影响面。
