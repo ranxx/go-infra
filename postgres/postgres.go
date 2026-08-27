@@ -1,17 +1,33 @@
 package postgres
 
 import (
+	"context"
+	"io"
+	"log"
+	"os"
 	"sync"
 	"time"
 
 	pgdriver "gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 var (
 	_db  *gorm.DB
 	once sync.Once
 )
+
+func init() {
+	// GORM's Scan path temporarily replaces the configured logger with its
+	// package-level recorder. Configure that recorder too, otherwise Scan can
+	// expand bound values even when the database logger is parameterized.
+	gormlogger.RecorderParamsFilter = redactSQLParameters
+}
+
+func redactSQLParameters(_ context.Context, sql string, _ ...interface{}) (string, []interface{}) {
+	return sql, nil
+}
 
 // Init 初始化 PostgreSQL 客户端（单例）
 func Init(cfg *Config) (*gorm.DB, error) {
@@ -29,8 +45,22 @@ func Init(cfg *Config) (*gorm.DB, error) {
 
 // NewGormDB 创建 GORM DB 客户端
 func NewGormDB(cfg *Config) (*gorm.DB, error) {
+	return newGormDB(cfg, os.Stdout)
+}
+
+func newGormDB(cfg *Config, logOutput io.Writer) (*gorm.DB, error) {
+	if logOutput == nil {
+		logOutput = io.Discard
+	}
 	db, err := gorm.Open(pgdriver.Open(cfg.DSN), &gorm.Config{
 		CreateBatchSize: cfg.CreateBatchSize,
+		Logger: gormlogger.New(log.New(logOutput, "\r\n", log.LstdFlags), gormlogger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  gormlogger.Warn,
+			IgnoreRecordNotFoundError: true,
+			ParameterizedQueries:      true,
+			Colorful:                  false,
+		}),
 	})
 	if err != nil {
 		return nil, err
@@ -40,8 +70,6 @@ func NewGormDB(cfg *Config) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	db = db.Debug()
 
 	sqlDB.SetMaxIdleConns(cfg.IdleConns)
 	sqlDB.SetMaxOpenConns(cfg.MaxConns)
